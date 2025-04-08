@@ -18,7 +18,7 @@ st.set_page_config(
 # If the CSV is in a 'data' subdirectory, use 'data/Top37.csv'
 script_dir = os.path.dirname(os.path.abspath(__file__))
 # Try relative path first, then potentially absolute if needed
-relative_path = "Top37.csv"
+relative_path = "Chiaki_wine_prediction/Top37.csv"
 absolute_path = os.path.join(script_dir, relative_path)
 
 # Check if the file exists at the relative path

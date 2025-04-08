@@ -1,1 +1,17 @@
 streamlit
+pandas
+numpy
+plotly
+scipy
+statsmodels
+scikit-learn
+tensorflow # Or tensorflow-cpu if you don't need GPU
+joblib
+# Add torch if you ended up using it, otherwise remove
+# torch
+# Add openpyxl if pandas needs it for excel, etc.
+# Add any other specific libraries you imported
+
+# Optional: Pin versions for reproducibility (recommended)
+# Example: pandas==2.1.4
+# Check your local versions using 'pip freeze'
