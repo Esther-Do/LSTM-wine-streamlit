@@ -13,8 +13,8 @@ import os
 import warnings
 
 # Suppress TensorFlow warnings if desired
-# tf.get_logger().setLevel('ERROR')
-# warnings.filterwarnings('ignore')
+tf.get_logger().setLevel('ERROR')
+warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="LSTM Forecast & DeepVaR", layout="wide")
 
@@ -30,12 +30,12 @@ def sanitize_filename(name):
     name = name.replace(',', '').replace('\'', '').replace('&', 'and')
     return "_".join(name.split())[:50] # Limit length
 
-# Function to calculate 95% confidence interval (adjust if needed)
+# Function to calculate 95% confidence interval
 def calculate_95ci(predictions):
-    """ Placeholder for CI calculation - robust calculation is complex """
+    """ Calculate 95% confidence interval """
     if predictions is None or len(predictions) == 0:
         return np.array([]), np.array([])
-    std_dev = np.std(predictions) # Simple std dev - might underestimate uncertainty
+    std_dev = np.std(predictions)
     ci_lower = predictions - 1.96 * std_dev
     ci_upper = predictions + 1.96 * std_dev
     return ci_lower, ci_upper
@@ -68,7 +68,8 @@ if 'df_returns' not in st.session_state or 'wine_columns' not in st.session_stat
 
 returns = st.session_state['df_returns']
 wine_columns = st.session_state['wine_columns']
-df_original_index = st.session_state['df_original'].index # Get original datetime index
+df_original = st.session_state['df_original']
+df_original_index = df_original.index # Get original datetime index
 
 # --- User Inputs ---
 st.sidebar.header("LSTM/DeepVaR Options")
@@ -111,176 +112,371 @@ def load_lstm_resource(wine_name):
         st.error(f"Error loading model/scaler for {wine_name}: {e}")
         return None, None
 
-# --- Generate Predictions and VaR (Cached per Wine/Investment) ---
-@st.cache_data(show_spinner="Generating LSTM predictions and VaR...")
-def get_lstm_predictions_and_var(wine_name, _returns_df, _investment_amount):
-    """Generates LSTM predictions and calculates VaR metrics."""
-    model, scaler = load_lstm_resource(wine_name)
-    if model is None or scaler is None:
-        return {"error": "Model/Scaler not loaded"}
+# Function to prepare data for LSTM prediction
+def prepare_lstm_data(time_series, lag=LAG):
+    """Prepares data in the format expected by LSTM model."""
+    X, y = [], []
+    for i in range(len(time_series) - lag):
+        X.append(time_series[i:i+lag])
+        y.append(time_series[i+lag])
+    return np.array(X), np.array(y)
 
-    wine_returns = _returns_df[wine_name].copy().dropna()
-    historical_var_perc = hs_var_calc(wine_returns, alpha=95) # 95% historical VaR
-
-    # Scale the full time series
-    time_series_scaled = scaler.transform(wine_returns.values.reshape(-1, 1))
-
-    # Prepare sequence for future prediction
-    last_sequence = time_series_scaled[-LAG:]
-    if len(last_sequence) < LAG:
-         return {"error": f"Insufficient data length ({len(wine_returns)}) to create lag sequence of {LAG}"}
-
-    # Predict Future
-    future_predictions_scaled = []
-    current_sequence = last_sequence.reshape((1, LAG, 1))
-
-    for _ in range(12): # Predict 12 steps ahead
-        next_pred_scaled = model.predict(current_sequence, verbose=0)[0, 0]
-        future_predictions_scaled.append(next_pred_scaled)
-        # Update sequence: remove first element, append prediction
-        new_sequence_scaled = np.append(current_sequence[0, 1:, 0], next_pred_scaled).reshape((1, LAG, 1))
-        current_sequence = new_sequence_scaled
-
-    # Inverse transform future predictions
-    future_predictions_inverse = scaler.inverse_transform(np.array(future_predictions_scaled).reshape(-1, 1))
-
-    # Calculate Deep VaR
+# Function to make future predictions
+# Note: Using _scaler with underscore to avoid hashing issues with StandardScaler
+def generate_predictions(wine_name, time_series, model, _scaler, lag=LAG):
+    """Generates historical and future predictions using the LSTM model."""
+    # Use _scaler instead of scaler in the function signature to avoid hashing issues
+    scaler = _scaler
+    
+    # Prepare data
+    X, y = prepare_lstm_data(time_series, lag)
+    
+    # Split data into train/test (80/20)
+    train_size = int(len(X) * 0.8)
+    X_train, X_test = X[:train_size], X[train_size:]
+    y_train, y_test = y[:train_size], y[train_size:]
+    
+    # Make predictions on test data
+    y_pred_lstm = model.predict(X_test)
+    
+    # Inverse transform predictions and actual values
+    y_test_inverse = scaler.inverse_transform(y_test.reshape(-1, 1))
+    y_pred_lstm_inverse = scaler.inverse_transform(y_pred_lstm)
+    
+    # Calculate confidence intervals
+    ci_lower, ci_upper = calculate_95ci(y_pred_lstm_inverse)
+    
+    # Calculate RMSE
+    rmse = root_mean_squared_error(y_test_inverse, y_pred_lstm_inverse)
+    
+    # Generate future predictions (12 months)
+    future_predictions = []
+    # Get the last lag values from the time series
+    last_sequence = time_series[-lag:].reshape(1, lag, 1)
+    
+    # Make future predictions one step at a time
+    for _ in range(12):
+        # Predict the next value
+        next_pred = model.predict(last_sequence, verbose=0)
+        # Store the prediction
+        future_predictions.append(next_pred[0, 0])
+        # Update the sequence by removing the first value and adding the new prediction at the end
+        # Create a new sequence with the updated values
+        last_sequence = np.roll(last_sequence, -1, axis=1)
+        last_sequence[0, -1, 0] = next_pred[0, 0]
+    
+    # Convert predictions to numpy array and reshape
+    future_predictions = np.array(future_predictions).reshape(-1, 1)
+    # Inverse transform to get actual values
+    future_predictions_inverse = scaler.inverse_transform(future_predictions)
+    
+    # Calculate confidence intervals for future predictions
+    future_lower, future_upper = calculate_95ci(future_predictions_inverse)
+    
+    # Calculate Historical VaR (95%)
+    historical_var = hs_var_calc(returns[wine_name])
+    
+    # Calculate DeepVaR using future predictions
+    # For simplicity, we'll use the lower bound of the confidence interval
+    # as a proxy for VaR (this is a simplified approach)
     deep_var_values = []
     deep_var_amounts = []
-    # Simple DeepVaR: Use the 5th percentile of *predicted* future returns
-    # More complex methods exist (e.g., simulating from predicted distribution)
-    # Here, we'll just take the 5th percentile of the 12 predicted returns
-    if len(future_predictions_inverse) > 0:
-        pred_returns_flat = future_predictions_inverse.flatten()
-        for i in range(1, 13):
-             # Use the predicted returns up to month i
-             current_preds = pred_returns_flat[:i]
-             if len(current_preds) > 0:
-                  # Calculate VaR based on the model's predicted returns for that month
-                  # This is a simplified approach. A more robust way involves quantile regression
-                  # or simulating paths based on predicted volatility.
-                  # Here we use the predicted value directly as a point estimate of loss,
-                  # or calculate percentile from *all* future predictions.
-                  # Let's use the percentile of all 12 future preds as a proxy.
-                  var_value_deep = -np.percentile(pred_returns_flat, 5) # 5th percentile of the 12 predictions
-             else:
-                  var_value_deep = np.nan
-
-             deep_var_values.append(var_value_deep if not np.isnan(var_value_deep) else 0) # Handle potential NaN
-             deep_var_amounts.append((var_value_deep * _investment_amount) if not np.isnan(var_value_deep) else 0)
-
-
-    # Prepare results for plotting test performance (optional but good practice)
-    def create_lagged_features(data, lag):
-        X, y = [], []
-        for i in range(len(data) - lag):
-            X.append(data[i:i+lag])
-            y.append(data[i+lag])
-        return np.array(X), np.array(y)
-
-    X, y = create_lagged_features(time_series_scaled, LAG)
-    X = X.reshape(X.shape[0], X.shape[1], 1)
-    train_size = int(0.80 * len(X)) # Assuming 80/20 split used in training
-    X_test = X[train_size:]
-    y_test = y[train_size:]
-
-    y_pred_lstm_scaled = model.predict(X_test, verbose=0)
-    y_pred_lstm_inverse = scaler.inverse_transform(y_pred_lstm_scaled)
-    y_test_inverse = scaler.inverse_transform(y_test)
-    test_rmse = root_mean_squared_error(y_test_inverse, y_pred_lstm_inverse)
-    test_ci_lower, test_ci_upper = calculate_95ci(y_pred_lstm_inverse) # Simple CI
-
-
+    
+    for i in range(len(future_predictions_inverse)):
+        # Calculate potential loss as difference between prediction and lower bound
+        potential_loss = (future_predictions_inverse[i] - future_lower[i]) / future_predictions_inverse[i]
+        deep_var_values.append(float(potential_loss))
+        
+        # Calculate VaR amount for $1000 investment
+        deep_var_amounts.append(float(potential_loss * 1000))
+    
     return {
-        "original_returns": wine_returns,
-        "y_test_inverse": y_test_inverse,
-        "y_pred_lstm_inverse": y_pred_lstm_inverse,
-        "test_rmse": test_rmse,
-        "test_ci_lower": test_ci_lower,
-        "test_ci_upper": test_ci_upper,
-        "future_predictions": future_predictions_inverse,
-        "historical_var_perc": historical_var_perc,
-        "deep_var_values": deep_var_values,
-        "deep_var_amounts": deep_var_amounts,
-        "train_split_index": train_size + LAG # Index in original returns where test starts
+        'time_series': time_series,
+        'lag': lag,
+        'train_size': train_size,
+        'y_test_inverse': y_test_inverse,
+        'y_pred_lstm_inverse': y_pred_lstm_inverse,
+        'ci_lower': ci_lower,
+        'ci_upper': ci_upper,
+        'rmse': rmse,
+        'future_predictions': future_predictions_inverse,
+        'future_lower': future_lower,
+        'future_upper': future_upper,
+        'historical_var': historical_var,
+        'deep_var_values': deep_var_values,
+        'deep_var_amounts': deep_var_amounts
     }
 
-# --- Run Model and Display Results ---
-st.header(f"LSTM Forecast & DeepVaR for: {selected_wine_lstm}")
-
-results = get_lstm_predictions_and_var(selected_wine_lstm, returns, investment_lstm)
-
-if "error" in results:
-    st.error(f"Could not generate forecast for {selected_wine_lstm}. Reason: {results['error']}")
-else:
-    # Determine display months
-    horizon_map = {'3 Months': 3, '6 Months': 6, '12 Months': 12}
-    display_months = horizon_map[forecast_horizon_lstm]
-
-    # Get dates
-    original_dates = results['original_returns'].index
-    test_start_index_in_orig = results['train_split_index']
-    test_dates = original_dates[test_start_index_in_orig : test_start_index_in_orig + len(results['y_test_inverse'])]
-    last_historical_date = original_dates[-1]
-    future_month_strings = generate_future_month_strings(last_historical_date, 12)
-
-    # --- Plot 1: Historical Performance ---
-    st.subheader("LSTM Model Performance on Test Data")
-    fig_hist = go.Figure()
-    fig_hist.add_trace(go.Scatter(x=original_dates, y=results['original_returns'], mode='lines', name='Historical Returns', line=dict(color='blue')))
-    fig_hist.add_trace(go.Scatter(x=test_dates, y=results['y_test_inverse'].flatten(), mode='lines', name='True Test Returns', line=dict(color='green')))
-    fig_hist.add_trace(go.Scatter(x=test_dates, y=results['y_pred_lstm_inverse'].flatten(), mode='lines', name='LSTM Test Predictions', line=dict(color='red')))
-    # Add Test CI
-    fig_hist.add_trace(go.Scatter(x=test_dates, y=results['test_ci_upper'].flatten(), mode='lines', line=dict(width=0), showlegend=False))
-    fig_hist.add_trace(go.Scatter(x=test_dates, y=results['test_ci_lower'].flatten(), mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255,0,0,0.1)', name='95% CI (Test - Simple)'))
-
-    fig_hist.update_layout(
-        title=f"LSTM Test Performance (RMSE: {results['test_rmse']:.3})",
-        xaxis_title='Date', yaxis_title='Monthly Return', height=400, template='plotly_white', hovermode='x unified'
+# Function to plot the selected wine's forecast and VaR
+def plot_wine_forecast_and_var(wine, horizon, investment):
+    # Load model and scaler
+    model, scaler = load_lstm_resource(wine)
+    
+    if model is None or scaler is None:
+        st.error(f"Could not load model or scaler for {wine}")
+        return None, None, None, None
+    
+    # Get the time series data
+    time_series = returns[wine].values.reshape(-1, 1)
+    
+    # Scale the data
+    scaled_data = scaler.transform(time_series)
+    
+    # Generate predictions
+    model_data = generate_predictions(wine, scaled_data, model, scaler)
+    
+    # Get the data
+    time_series = model_data['time_series']
+    lag = model_data['lag']
+    train_size = model_data['train_size']
+    y_test_inverse = model_data['y_test_inverse']
+    y_pred_lstm_inverse = model_data['y_pred_lstm_inverse']
+    ci_lower = model_data['ci_lower']
+    ci_upper = model_data['ci_upper']
+    rmse = model_data['rmse']
+    future_predictions = model_data['future_predictions']
+    future_lower = model_data['future_lower']
+    future_upper = model_data['future_upper']
+    historical_var = model_data['historical_var']
+    deep_var_values = model_data['deep_var_values']
+    deep_var_amounts = model_data['deep_var_amounts']
+    
+    # Calculate indices for train and test data
+    train_start_idx = lag
+    train_end_idx = train_size + lag
+    test_end_idx = train_end_idx + len(y_test_inverse)
+    
+    # Ensure we don't go out of bounds
+    max_idx = len(df_original_index)
+    train_start_idx = min(train_start_idx, max_idx-1)
+    train_end_idx = min(train_end_idx, max_idx)
+    test_end_idx = min(test_end_idx, max_idx)
+    
+    # Get the dates for historical data
+    historical_dates = df_original_index[-len(time_series):]
+    train_dates = df_original_index[train_start_idx:train_end_idx]
+    test_dates = df_original_index[train_end_idx:test_end_idx]
+    
+    # Get the last date in the dataset
+    last_date = df_original_index[-1]
+    
+    # Determine how many months to display based on selected horizon
+    if horizon == '3 Months':
+        display_months = 3
+    elif horizon == '6 Months':
+        display_months = 6
+    else:  # 12 Months
+        display_months = 12
+    
+    # Generate future month strings
+    future_month_strings = generate_future_month_strings(last_date, 12)
+    
+    # Create Plotly figure for historical performance
+    fig = go.Figure()
+    
+    # Add actual data
+    fig.add_trace(go.Scatter(
+        x=historical_dates, 
+        y=scaler.inverse_transform(time_series.reshape(-1, 1)).flatten(),
+        mode='lines',
+        name='Historical Data',
+        line=dict(color='blue')
+    ))
+    
+    # Add true test values
+    fig.add_trace(go.Scatter(
+        x=test_dates, 
+        y=y_test_inverse.flatten(),
+        mode='lines',
+        name='True Test Values',
+        line=dict(color='green')
+    ))
+    
+    # Add test predictions
+    fig.add_trace(go.Scatter(
+        x=test_dates, 
+        y=y_pred_lstm_inverse.flatten(),
+        mode='lines',
+        name='Test Predictions',
+        line=dict(color='red')
+    ))
+    
+    # Add test confidence interval - upper bound
+    fig.add_trace(go.Scatter(
+        x=test_dates,
+        y=ci_upper.flatten(),
+        mode='lines',
+        line=dict(width=0),
+        showlegend=False
+    ))
+    
+    # Add test confidence interval - lower bound
+    fig.add_trace(go.Scatter(
+        x=test_dates,
+        y=ci_lower.flatten(),
+        mode='lines',
+        line=dict(width=0),
+        fill='tonexty',
+        fillcolor='rgba(255,165,0,0.2)',
+        name='95% CI (Test)'
+    ))
+    
+    # Update historical figure layout
+    fig.update_layout(
+        title=dict(
+            text=f'{wine} <br> LSTM Historical Performance. RMSE: {rmse:.3f}',
+            x=0.5,  # Center the title horizontally
+            xanchor='center'
+        ),
+        xaxis_title='Date',
+        yaxis_title='Price Change',
+        legend_title='Legend',
+        height=400,
+        template='plotly_white',
+        hovermode='x unified'
     )
-    st.plotly_chart(fig_hist, use_container_width=True)
-
-    # --- Plot 2: Future Predictions ---
-    st.subheader(f"LSTM Future Return Predictions ({forecast_horizon_lstm})")
-    fig_future = go.Figure()
-    future_preds_display = results['future_predictions'][:display_months]
-    future_months_display = future_month_strings[:display_months]
-    # Simple CI for future preds
-    future_ci_lower, future_ci_upper = calculate_95ci(future_preds_display)
-
-    fig_future.add_trace(go.Scatter(x=future_months_display, y=future_preds_display.flatten(), mode='lines+markers', name='Predicted Future Return', line=dict(color='purple')))
-    # Add Future CI
-    fig_future.add_trace(go.Scatter(x=future_months_display, y=future_ci_upper.flatten(), mode='lines', line=dict(width=0), showlegend=False))
-    fig_future.add_trace(go.Scatter(x=future_months_display, y=future_ci_lower.flatten(), mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(128,0,128,0.1)', name='95% CI (Future - Simple)'))
-
-    fig_future.update_layout(
-        title=f"Predicted Future Monthly Returns ({forecast_horizon_lstm})",
-        xaxis_title='Month', yaxis_title='Predicted Monthly Return', height=400, template='plotly_white', hovermode='x unified'
+    
+    # Create figure for future predictions
+    future_fig = go.Figure()
+    
+    # Add future predictions - only show the selected number of months
+    display_month_strings = future_month_strings[:display_months]
+    display_predictions = future_predictions[:display_months]
+    display_lower = future_lower[:display_months]
+    display_upper = future_upper[:display_months]
+    
+    # Add future predictions line
+    future_fig.add_trace(go.Scatter(
+        x=display_month_strings, 
+        y=display_predictions.flatten(),
+        mode='lines+markers',
+        name=f'Future Predictions ({horizon})',
+        line=dict(color='purple'),
+        marker=dict(size=8)
+    ))
+    
+    # Add future confidence interval - upper bound
+    future_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=display_upper.flatten(),
+        mode='lines',
+        line=dict(width=0),
+        showlegend=False
+    ))
+    
+    # Add future confidence interval - lower bound
+    future_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=display_lower.flatten(),
+        mode='lines',
+        line=dict(width=0),
+        fill='tonexty',
+        fillcolor='rgba(128,0,128,0.2)',
+        name=f'95% CI ({horizon})'
+    ))
+    
+    # Update future figure layout
+    future_fig.update_layout(
+        title=dict(text=f'Future Predictions ({horizon})',
+                   x=0.5,  # Center the title horizontally
+                   xanchor='center'),
+        xaxis_title='Month',
+        yaxis_title='Price Change',
+        legend_title='Legend',
+        height=400,
+        template='plotly_white',
+        hovermode='x unified'
     )
-    st.plotly_chart(fig_future, use_container_width=True)
-
-    # --- Plot 3: VaR Comparison ---
-    st.subheader(f"Value at Risk (VaR) Comparison for ${investment_lstm:,.0f} Investment")
-    fig_var = go.Figure()
-    hist_var_amount = results['historical_var_perc'] * investment_lstm
-    deep_var_amounts_display = results['deep_var_amounts'][:display_months]
-
-    fig_var.add_trace(go.Scatter(x=future_months_display, y=[hist_var_amount] * display_months, mode='lines', name=f'Historical VaR (${hist_var_amount:,.2f})', line=dict(color='red', dash='dash')))
-    fig_var.add_trace(go.Scatter(x=future_months_display, y=deep_var_amounts_display, mode='lines+markers', name='Deep VaR (LSTM Based)', line=dict(color='blue')))
-
-    fig_var.update_layout(
-        title=f"Historical VaR vs. DeepVaR (95% Confidence, ${investment_lstm:,.0f} Investment)",
-        xaxis_title='Forecast Month', yaxis_title='VaR Amount ($) - Potential Loss', height=400, template='plotly_white', hovermode='x unified'
+    
+    # Create VaR figure
+    var_fig = go.Figure()
+    
+    # Calculate historical VaR amount for the current investment
+    historical_var_amount = investment * historical_var
+    
+    # Scale Deep VaR amounts for the current investment
+    scaled_deep_var_amounts = [amount * (investment / 1000) for amount in deep_var_amounts]
+    
+    # Add Historical VaR line
+    var_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=[historical_var_amount] * len(display_month_strings),
+        mode='lines',
+        name='Historical VaR',
+        line=dict(color='red', dash='dash')
+    ))
+    
+    # Add Deep VaR line
+    var_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=scaled_deep_var_amounts[:display_months],
+        mode='lines+markers',
+        name='Deep VaR',
+        line=dict(color='blue'),
+        marker=dict(size=8)
+    ))
+    
+    # Update VaR figure layout
+    var_fig.update_layout(
+        title=dict(text=f'Value at Risk (95%) for ${investment} Investment',
+                   x=0.5,  # Center the title horizontally
+                   xanchor='center'),
+        xaxis_title='Month',
+        yaxis_title='VaR Amount ($)',
+        legend_title='Legend',
+        height=400,
+        template='plotly_white',
+        hovermode='x unified'
     )
-    st.plotly_chart(fig_var, use_container_width=True)
+    
+    # Create a table to show VaR comparison
+    var_comparison = pd.DataFrame({
+        'Month': future_month_strings[:display_months],
+        'Historical VaR (%)': [historical_var] * display_months,
+        'Historical VaR ($)': [historical_var_amount] * display_months,
+        'Deep VaR (%)': deep_var_values[:display_months],
+        'Deep VaR ($)': scaled_deep_var_amounts[:display_months]
+    })
+    
+    table_fig = go.Figure(data=[go.Table(
+        header=dict(values=list(var_comparison.columns),
+                    # fill_color='paleturquoise',
+                    align='left'),
+        cells=dict(values=[var_comparison[col] for col in var_comparison.columns],
+                #   fill_color='lavender',
+                  align='left',
+                  format=[None, '.4f', '.2f', '.4f', '.2f'])
+    )])
+    
+    table_fig.update_layout(
+        title=dict(text=f'VaR Comparison ({horizon})',
+                   x=0.5,
+                   xanchor='center'),
+        height=400
+    )
+    
+    return fig, future_fig, var_fig, table_fig
 
-    # --- Table: VaR Comparison ---
-    st.subheader(f"VaR Comparison Data ({forecast_horizon_lstm})")
-    var_comp_data = {
-        'Month': future_months_display,
-        'Hist. VaR (%)': [f"{results['historical_var_perc']:.2%}"] * display_months,
-        'Hist. VaR ($)': [f"${hist_var_amount:,.2f}"] * display_months,
-        'Deep VaR (%)': [f"{v:.2%}" for v in results['deep_var_values'][:display_months]],
-        'Deep VaR ($)': [f"${a:,.2f}" for a in deep_var_amounts_display]
-    }
-    st.dataframe(pd.DataFrame(var_comp_data))
+# Main app layout
+st.markdown(f"### LSTM Model Analysis for {selected_wine_lstm}")
+st.markdown("""
+This page provides forecasting and risk analysis using Long Short-Term Memory (LSTM) neural networks.
+The model predicts future price movements and calculates DeepVaR (Value at Risk) based on the uncertainty in predictions.
+""")
+
+# Display plots one by one
+try:
+    fig, future_fig, var_fig, table_fig = plot_wine_forecast_and_var(
+        selected_wine_lstm, forecast_horizon_lstm, investment_lstm
+    )
+    
+    if fig and future_fig and var_fig and table_fig:
+        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(future_fig, use_container_width=True)
+        st.plotly_chart(var_fig, use_container_width=True)
+        st.plotly_chart(table_fig, use_container_width=True)
+            
+except Exception as e:
+    st.error(f"Error generating plots: {e}")
+    import traceback
+    st.error(traceback.format_exc())
