@@ -84,8 +84,8 @@ else:
     st.dataframe(pd.DataFrame(var_data))
 
     st.markdown(f"""
-    *Interpretation:* With {confidence_level_var}% confidence, the maximum expected loss for a ${investment_var:,.2f}
-    investment in '{selected_wine_var}' over the next month is approximately **${varM_amount:,.2f}**.
+    *Interpretation:* With {confidence_level_var}% confidence, the maximum expected loss for a ${investment_var:,.2f} 
+    investment in  '{selected_wine_var}'  over the next month is approximately **${varM_amount:,.2f}**.
     Over the next year, it is approximately **${varY_amount:,.2f}**, assuming return characteristics remain similar.
     """)
 
