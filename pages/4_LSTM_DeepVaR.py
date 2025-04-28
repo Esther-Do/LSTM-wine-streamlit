@@ -474,7 +474,7 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
     )])
     
     table_fig.update_layout(
-        title=dict(text=f'VaR and P&L Comparison ({horizon})',
+        title=dict(text=f'VaR and PnL Comparison ({horizon})',
                    x=0.5,
                    xanchor='center'),
         height=400
