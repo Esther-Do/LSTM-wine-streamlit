@@ -329,7 +329,7 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
             xanchor='center'
         ),
         xaxis_title='Date',
-        yaxis_title='Price Change',
+        yaxis_title='Returns',
         legend_title='Legend',
         height=400,
         template='plotly_white',
@@ -381,7 +381,7 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
                    x=0.5,  # Center the title horizontally
                    xanchor='center'),
         xaxis_title='Month',
-        yaxis_title='Price Change',
+        yaxis_title='Returns',
         legend_title='Legend',
         height=400,
         template='plotly_white',
