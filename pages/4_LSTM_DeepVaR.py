@@ -406,7 +406,7 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         x=display_month_strings,
         y=[historical_var_amount] * len(display_month_strings),
         mode='lines',
-        name='Historical VaR',
+        name='HS VaR',
         line=dict(color='red', dash='dash')
     ))
     
@@ -425,7 +425,7 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         x=display_month_strings,
         y=pnl_values,
         mode='lines+markers',
-        name='Expected P&L',
+        name='Expected PnL',
         line=dict(color='green'),
         marker=dict(size=8)
     ))
@@ -456,11 +456,11 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
     # Create a table to show VaR comparison
     var_comparison = pd.DataFrame({
         'Month': future_month_strings[:display_months],
-        'Historical VaR (%)': [historical_var] * display_months,
-        'Historical VaR ($)': [historical_var_amount] * display_months,
+        'HS VaR (%)': [historical_var] * display_months,
+        'HS VaR ($)': [historical_var_amount] * display_months,
         'Deep VaR (%)': deep_var_values[:display_months],
         'Deep VaR ($)': scaled_deep_var_amounts[:display_months],
-        'Expected P&L ($)': pnl_values
+        'Expected PnL ($)': pnl_values
     })
     
     table_fig = go.Figure(data=[go.Table(
