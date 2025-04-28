@@ -397,6 +397,10 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
     # Scale Deep VaR amounts for the current investment
     scaled_deep_var_amounts = [amount * (investment / 1000) for amount in deep_var_amounts]
     
+    # Calculate Profit/Loss based on future predictions
+    # Assuming future_predictions are percentage changes
+    pnl_values = [investment * pred for pred in future_predictions[:display_months].flatten()]
+    
     # Add Historical VaR line
     var_fig.add_trace(go.Scatter(
         x=display_month_strings,
@@ -416,13 +420,33 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         marker=dict(size=8)
     ))
     
+    # Add PnL line
+    var_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=pnl_values,
+        mode='lines+markers',
+        name='Expected P&L',
+        line=dict(color='green'),
+        marker=dict(size=8)
+    ))
+    
+    # Add a horizontal line at y=0 to better visualize profit vs loss
+    var_fig.add_shape(
+        type="line",
+        x0=display_month_strings[0],
+        y0=0,
+        x1=display_month_strings[-1],
+        y1=0,
+        line=dict(color="black", width=1, dash="dot")
+    )
+    
     # Update VaR figure layout
     var_fig.update_layout(
-        title=dict(text=f'Value at Risk (95%) for ${investment} Investment',
+        title=dict(text=f'Value at Risk and Expected P&L for ${investment} Investment',
                    x=0.5,  # Center the title horizontally
                    xanchor='center'),
         xaxis_title='Month',
-        yaxis_title='VaR Amount ($)',
+        yaxis_title='Amount ($)',
         legend_title='Legend',
         height=400,
         template='plotly_white',
@@ -435,7 +459,8 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         'Historical VaR (%)': [historical_var] * display_months,
         'Historical VaR ($)': [historical_var_amount] * display_months,
         'Deep VaR (%)': deep_var_values[:display_months],
-        'Deep VaR ($)': scaled_deep_var_amounts[:display_months]
+        'Deep VaR ($)': scaled_deep_var_amounts[:display_months],
+        'Expected P&L ($)': pnl_values
     })
     
     table_fig = go.Figure(data=[go.Table(
@@ -445,11 +470,11 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         cells=dict(values=[var_comparison[col] for col in var_comparison.columns],
                 #   fill_color='lavender',
                   align='left',
-                  format=[None, '.4f', '.2f', '.4f', '.2f'])
+                  format=[None, '.4f', '.2f', '.4f', '.2f', '.2f'])
     )])
     
     table_fig.update_layout(
-        title=dict(text=f'VaR Comparison ({horizon})',
+        title=dict(text=f'VaR and P&L Comparison ({horizon})',
                    x=0.5,
                    xanchor='center'),
         height=400
