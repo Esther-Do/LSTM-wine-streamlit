@@ -442,7 +442,7 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
     
     # Update VaR figure layout
     var_fig.update_layout(
-        title=dict(text=f'Value at Risk and Expected P&L for ${investment} Investment',
+        title=dict(text=f'Value at Risk and Expected PnL for ${investment} Investment',
                    x=0.5,  # Center the title horizontally
                    xanchor='center'),
         xaxis_title='Month',
