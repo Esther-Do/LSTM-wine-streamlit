@@ -72,7 +72,7 @@ df_original = st.session_state['df_original']
 df_original_index = df_original.index # Get original datetime index
 
 # --- User Inputs ---
-st.sidebar.header("LSTM/DeepVaR Options")
+st.sidebar.header("DeepVaR Options")
 selected_wine_lstm = st.sidebar.selectbox(
     "Select Wine",
     wine_columns,
