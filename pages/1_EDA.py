@@ -47,7 +47,7 @@ def plot_original_price(wine_name):
     fig.update_layout(
         title=f'Original Price Trend for {wine_name}',
         xaxis_title='Date',
-        yaxis_title='Price',
+        yaxis_title='Price ($)',
         template='plotly_white',
         height=500,
         yaxis=dict(
