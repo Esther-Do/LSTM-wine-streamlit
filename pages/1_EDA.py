@@ -42,7 +42,8 @@ def plot_original_price(wine_name):
         x=df.index,
         y=df[wine_name],
         mode='lines',
-        name=wine_name
+        name=wine_name,
+        line=dict(color='#800020')  # Burgundy red
     ))
     fig.update_layout(
         title=f'Original Price Trend for {wine_name}',
@@ -53,8 +54,8 @@ def plot_original_price(wine_name):
         yaxis=dict(
             tickformat=",.2f",
             separatethousands=True),
-        xaxis_title_font=dict(size=20),
-        yaxis_title_font=dict(size=16)
+        xaxis=dict(title_font=dict(size=20),tickfont=dict(size=20))
+        yaxis=dict(title_font=dict(size=20),tickfont=dict(size=20))
     )
     st.plotly_chart(fig, use_container_width=True)
 
