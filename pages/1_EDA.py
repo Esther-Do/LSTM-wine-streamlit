@@ -52,7 +52,9 @@ def plot_original_price(wine_name):
         height=500,
         yaxis=dict(
             tickformat=",.2f",
-            separatethousands=True)
+            separatethousands=True),
+        xaxis_title_font=dict(size=20),
+        yaxis_title_font=dict(size=16)
     )
     st.plotly_chart(fig, use_container_width=True)
 
