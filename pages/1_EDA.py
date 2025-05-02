@@ -38,6 +38,7 @@ eda_plot_type = st.sidebar.radio(
 # 1. Original Price Plot
 def plot_original_price(wine_name):
     fig = go.Figure()
+    
     fig.add_trace(go.Scatter(
         x=df.index,
         y=df[wine_name],
@@ -45,6 +46,7 @@ def plot_original_price(wine_name):
         name=wine_name,
         line=dict(color='#800020')  # Burgundy red
     ))
+    
     fig.update_layout(
         title=f'Original Price Trend for {wine_name}',
         xaxis_title='Date',
@@ -55,7 +57,7 @@ def plot_original_price(wine_name):
             tickformat=",.2f",
             separatethousands=True),
         xaxis=dict(title_font=dict(size=20),tickfont=dict(size=20)),
-        yaxis=dict(title_font=dict(size=20),tickfont=dict(size=20))
+        #yaxis=dict(title_font=dict(size=20),tickfont=dict(size=20))
     )
     st.plotly_chart(fig, use_container_width=True)
 
