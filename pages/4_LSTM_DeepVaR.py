@@ -40,6 +40,15 @@ def calculate_95ci(predictions):
     ci_upper = predictions + 1.96 * std_dev
     return ci_lower, ci_upper
 
+def calculate_99ci(predictions):
+    """Calculate 99% confidence interval"""
+    if predictions is None or len(predictions) == 0:
+        return np.array([]), np.array([])
+    std_dev = np.std(predictions)
+    ci_lower = predictions - 2.576 * std_dev
+    ci_upper = predictions + 2.576 * std_dev
+    return ci_lower, ci_upper
+
 def root_mean_squared_error(y_true, y_pred):
     return np.sqrt(mean_squared_error(y_true, y_pred))
 
@@ -56,10 +65,11 @@ def generate_future_month_strings(last_date, num_months):
     return future_months
 
 # Function to calculate Historical VaR
-def hs_var_calc(returns_series, alpha=95):
-    q = 100 - alpha
-    var_percent = -np.percentile(returns_series.dropna(), q)
-    return np.round(var_percent, 4)
+def hs_var_calc(returns_series):
+    """Calculate Historical VaR for both 95% and 99% confidence levels"""
+    var_95 = -np.percentile(returns_series.dropna(), 5)  # 95% VaR
+    var_99 = -np.percentile(returns_series.dropna(), 1)  # 99% VaR
+    return np.round(var_95, 4), np.round(var_99, 4)
 
 # --- Access data from session state ---
 if 'df_returns' not in st.session_state or 'wine_columns' not in st.session_state:
@@ -143,68 +153,75 @@ def generate_predictions(wine_name, time_series, model, _scaler, lag=LAG):
     y_test_inverse = scaler.inverse_transform(y_test.reshape(-1, 1))
     y_pred_lstm_inverse = scaler.inverse_transform(y_pred_lstm)
     
-    # Calculate confidence intervals
-    ci_lower, ci_upper = calculate_95ci(y_pred_lstm_inverse)
-    
     # Calculate RMSE
     rmse = root_mean_squared_error(y_test_inverse, y_pred_lstm_inverse)
     
-    # Generate future predictions (12 months)
-    future_predictions = []
-    # Get the last lag values from the time series
+    # Calculate confidence intervals for test predictions
+    ci_lower_95, ci_upper_95 = calculate_95ci(y_pred_lstm_inverse)
+    ci_lower_99, ci_upper_99 = calculate_99ci(y_pred_lstm_inverse)
+
+    # Generate future predictions
     last_sequence = time_series[-lag:].reshape(1, lag, 1)
+    future_predictions = []
+    current_sequence = last_sequence.copy()
     
-    # Make future predictions one step at a time
+    # Predict next 12 months
     for _ in range(12):
-        # Predict the next value
-        next_pred = model.predict(last_sequence, verbose=0)
-        # Store the prediction
+        next_pred = model.predict(current_sequence, verbose=0)
         future_predictions.append(next_pred[0, 0])
-        # Update the sequence by removing the first value and adding the new prediction at the end
-        # Create a new sequence with the updated values
-        last_sequence = np.roll(last_sequence, -1, axis=1)
-        last_sequence[0, -1, 0] = next_pred[0, 0]
+        current_sequence = np.roll(current_sequence, -1)
+        current_sequence[0, -1, 0] = next_pred[0, 0]
     
-    # Convert predictions to numpy array and reshape
+    # Convert future predictions array and inverse transform
     future_predictions = np.array(future_predictions).reshape(-1, 1)
-    # Inverse transform to get actual values
     future_predictions_inverse = scaler.inverse_transform(future_predictions)
     
-    # Calculate confidence intervals for future predictions
-    future_lower, future_upper = calculate_95ci(future_predictions_inverse)
+    # Now calculate confidence intervals with the inverse transformed predictions
+    future_lower_95, future_upper_95 = calculate_95ci(future_predictions_inverse)
+    future_lower_99, future_upper_99 = calculate_99ci(future_predictions_inverse)
     
-    # Calculate Historical VaR (95%)
-    historical_var = hs_var_calc(returns[wine_name])
+    # Calculate Historical VaR
+    historical_var_95, historical_var_99 = hs_var_calc(returns[wine_name])
     
     # Calculate DeepVaR using future predictions
-    # For simplicity, we'll use the lower bound of the confidence interval
-    # as a proxy for VaR (this is a simplified approach)
-    deep_var_values = []
-    deep_var_amounts = []
+    deep_var_values_95 = []
+    deep_var_amounts_95 = []
+    deep_var_values_99 = []
+    deep_var_amounts_99 = []
     
     for i in range(len(future_predictions_inverse)):
-        # Calculate potential loss as difference between prediction and lower bound
-        potential_loss = (future_predictions_inverse[i] - future_lower[i]) / future_predictions_inverse[i]
-        deep_var_values.append(float(potential_loss))
+        # Calculate 95% VaR
+        potential_loss_95 = (future_predictions_inverse[i] - future_lower_95[i]) / future_predictions_inverse[i]
+        deep_var_values_95.append(float(potential_loss_95))
+        deep_var_amounts_95.append(float(potential_loss_95 * 1000))
         
-        # Calculate VaR amount for $1000 investment
-        deep_var_amounts.append(float(potential_loss * 1000))
-    
+        # Calculate 99% VaR
+        potential_loss_99 = (future_predictions_inverse[i] - future_lower_99[i]) / future_predictions_inverse[i]
+        deep_var_values_99.append(float(potential_loss_99))
+        deep_var_amounts_99.append(float(potential_loss_99 * 1000))
+
     return {
         'time_series': time_series,
         'lag': lag,
         'train_size': train_size,
         'y_test_inverse': y_test_inverse,
         'y_pred_lstm_inverse': y_pred_lstm_inverse,
-        'ci_lower': ci_lower,
-        'ci_upper': ci_upper,
+        'ci_lower_95': ci_lower_95,
+        'ci_upper_95': ci_upper_95,
+        'ci_lower_99': future_lower_99,
+        'ci_upper_99': future_upper_99,
         'rmse': rmse,
         'future_predictions': future_predictions_inverse,
-        'future_lower': future_lower,
-        'future_upper': future_upper,
-        'historical_var': historical_var,
-        'deep_var_values': deep_var_values,
-        'deep_var_amounts': deep_var_amounts
+        'future_lower_95': future_lower_95,
+        'future_upper_95': future_upper_95,
+        'future_lower_99': future_lower_99,
+        'future_upper_99': future_upper_99,
+        'historical_var_95': historical_var_95,
+        'historical_var_99': historical_var_99,
+        'deep_var_values_95': deep_var_values_95,
+        'deep_var_amounts_95': deep_var_amounts_95,
+        'deep_var_values_99': deep_var_values_99,
+        'deep_var_amounts_99': deep_var_amounts_99
     }
 
 # Function to plot the selected wine's forecast and VaR
@@ -231,15 +248,20 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
     train_size = model_data['train_size']
     y_test_inverse = model_data['y_test_inverse']
     y_pred_lstm_inverse = model_data['y_pred_lstm_inverse']
-    ci_lower = model_data['ci_lower']
-    ci_upper = model_data['ci_upper']
+    ci_lower = model_data['ci_lower_95']
+    ci_upper = model_data['ci_upper_95']
     rmse = model_data['rmse']
     future_predictions = model_data['future_predictions']
-    future_lower = model_data['future_lower']
-    future_upper = model_data['future_upper']
-    historical_var = model_data['historical_var']
-    deep_var_values = model_data['deep_var_values']
-    deep_var_amounts = model_data['deep_var_amounts']
+    future_lower_95 = model_data['future_lower_95']
+    future_upper_95 = model_data['future_upper_95']
+    historical_var_95 = model_data['historical_var_95']
+    deep_var_values_95 = model_data['deep_var_values_95']
+    deep_var_amounts_95 = model_data['deep_var_amounts_95']
+    future_lower_99 = model_data['future_lower_99']
+    future_upper_99 = model_data['future_upper_99']
+    historical_var_99 = model_data['historical_var_99']
+    deep_var_values_99 = model_data['deep_var_values_99']
+    deep_var_amounts_99 = model_data['deep_var_amounts_99']
     
     # Calculate indices for train and test data
     train_start_idx = lag
@@ -297,7 +319,7 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         x=test_dates, 
         y=y_pred_lstm_inverse.flatten(),
         mode='lines',
-        name='Test Predictions',
+        name='Predictions Values',
         line=dict(color='red')
     ))
     
@@ -342,8 +364,10 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
     # Add future predictions - only show the selected number of months
     display_month_strings = future_month_strings[:display_months]
     display_predictions = future_predictions[:display_months]
-    display_lower = future_lower[:display_months]
-    display_upper = future_upper[:display_months]
+    display_lower_95 = future_lower_95[:display_months]
+    display_upper_95 = future_upper_95[:display_months]
+    display_lower_99 = future_lower_99[:display_months]
+    display_upper_99 = future_upper_99[:display_months]
     
     # Add future predictions line
     future_fig.add_trace(go.Scatter(
@@ -355,19 +379,19 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         marker=dict(size=8)
     ))
     
-    # Add future confidence interval - upper bound
+    # Add future 95 confidence interval - upper bound
     future_fig.add_trace(go.Scatter(
         x=display_month_strings,
-        y=display_upper.flatten(),
+        y=display_upper_95.flatten(),
         mode='lines',
         line=dict(width=0),
         showlegend=False
     ))
     
-    # Add future confidence interval - lower bound
+    # Add future 95 confidence interval - lower bound
     future_fig.add_trace(go.Scatter(
         x=display_month_strings,
-        y=display_lower.flatten(),
+        y=display_lower_95.flatten(),
         mode='lines',
         line=dict(width=0),
         fill='tonexty',
@@ -375,6 +399,26 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         name=f'95% CI ({horizon})'
     ))
     
+      # Add future 99 confidence interval - upper bound
+    future_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=display_upper_99.flatten(),
+        mode='lines',
+        line=dict(width=0),
+        showlegend=False
+    ))
+    
+    # Add future 99 confidence interval - lower bound
+    future_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=display_lower_99.flatten(),
+        mode='lines',
+        line=dict(width=0),
+        fill='tonexty',
+        fillcolor='rgba(128,0,128,0.2)',
+        name=f'95% CI ({horizon})'
+    ))
+
     # Update future figure layout
     future_fig.update_layout(
         title=dict(text=f'Future Predictions ({horizon})',
@@ -391,35 +435,17 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
     # Create VaR figure
     var_fig = go.Figure()
     
-    # Calculate historical VaR amount for the current investment
-    historical_var_amount = investment * historical_var
+    # Inside plot_wine_forecast_and_var function, update the VaR figure creation:
+    # Calculate VaR amounts
+    historical_var_amount_95 = investment * model_data['historical_var_95']
+    historical_var_amount_99 = investment * model_data['historical_var_99']
     
-    # Scale Deep VaR amounts for the current investment
-    scaled_deep_var_amounts = [amount * (investment / 1000) for amount in deep_var_amounts]
+    # Scale Deep VaR amounts
+    scaled_deep_var_amounts_95 = [amount * (investment / 1000) for amount in model_data['deep_var_amounts_95']]
+    scaled_deep_var_amounts_99 = [amount * (investment / 1000) for amount in model_data['deep_var_amounts_99']]
     
-    # Calculate Profit/Loss based on future predictions
-    # Assuming future_predictions are percentage changes
     pnl_values = [investment * pred for pred in future_predictions[:display_months].flatten()]
-    
-    # Add Historical VaR line
-    var_fig.add_trace(go.Scatter(
-        x=display_month_strings,
-        y=[historical_var_amount] * len(display_month_strings),
-        mode='lines',
-        name='HS VaR',
-        line=dict(color='red', dash='dash')
-    ))
-    
-    # Add Deep VaR line
-    var_fig.add_trace(go.Scatter(
-        x=display_month_strings,
-        y=scaled_deep_var_amounts[:display_months],
-        mode='lines+markers',
-        name='Deep VaR',
-        line=dict(color='blue'),
-        marker=dict(size=8)
-    ))
-    
+
     # Add PnL line
     var_fig.add_trace(go.Scatter(
         x=display_month_strings,
@@ -427,6 +453,41 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         mode='lines+markers',
         name='Expected PnL',
         line=dict(color='green'),
+        marker=dict(size=8)
+    ))
+
+    # Add VaR lines to figure
+    var_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=[historical_var_amount_95] * len(display_month_strings),
+        mode='lines',
+        name='HS VaR 95%',
+        line=dict(color='orange', dash='dash')
+    ))
+    
+    var_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=[historical_var_amount_99] * len(display_month_strings),
+        mode='lines',
+        name='HS VaR 99%',
+        line=dict(color='red', dash='dash')
+    ))
+    
+    var_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=scaled_deep_var_amounts_95[:display_months],
+        mode='lines+markers',
+        name='Deep VaR 95%',
+        line=dict(color='blue'),
+        marker=dict(size=8)
+    ))
+    
+    var_fig.add_trace(go.Scatter(
+        x=display_month_strings,
+        y=scaled_deep_var_amounts_99[:display_months],
+        mode='lines+markers',
+        name='Deep VaR 99%',
+        line=dict(color='purple'),
         marker=dict(size=8)
     ))
     
@@ -453,15 +514,19 @@ def plot_wine_forecast_and_var(wine, horizon, investment):
         hovermode='x unified'
     )
     
-    # Create a table to show VaR comparison
+     # Create comparison table with both 95% and 99% VaR
     var_comparison = pd.DataFrame({
         'Month': future_month_strings[:display_months],
-        'HS VaR (%)': [historical_var] * display_months,
-        'HS VaR ($)': [historical_var_amount] * display_months,
-        'Deep VaR (%)': deep_var_values[:display_months],
-        'Deep VaR ($)': scaled_deep_var_amounts[:display_months],
-        'Expected PnL ($)': pnl_values
-    })
+        'Expected PnL ($)': pnl_values,
+        'HS VaR 95% (%)': [model_data['historical_var_95']] * display_months,
+        'HS VaR 95% ($)': [historical_var_amount_95] * display_months,
+        'HS VaR 99% (%)': [model_data['historical_var_99']] * display_months,
+        'HS VaR 99% ($)': [historical_var_amount_99] * display_months,
+        'Deep VaR 95% (%)': model_data['deep_var_values_95'][:display_months],
+        'Deep VaR 95% ($)': scaled_deep_var_amounts_95[:display_months],
+        'Deep VaR 99% (%)': model_data['deep_var_values_99'][:display_months],
+        'Deep VaR 99% ($)': scaled_deep_var_amounts_99[:display_months]
+        })
     
     table_fig = go.Figure(data=[go.Table(
         header=dict(values=list(var_comparison.columns),
