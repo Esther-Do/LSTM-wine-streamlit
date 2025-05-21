@@ -66,14 +66,14 @@ def load_data(file_path):
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
         # Forward fill missing values AFTER numeric conversion
-        df = df.ffill()
+        df = df.bfill()
 
         # Handle potential remaining NaNs at the beginning
         df = df.bfill() # Backfill to handle NaNs at the very start
 
         # Check if all NaNs are handled
         if df.isna().sum().sum() > 0:
-             st.warning("NaN values remain after ffill and bfill. Check input data.")
+             st.warning("NaN values remain after bfill. Check input data.")
              st.write("NaN counts per column:")
              st.write(df.isna().sum())
 
