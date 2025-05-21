@@ -110,7 +110,7 @@ def get_decomposition(returns_series, wine_name):
     try:
         # Ensure the series has a frequency, default to Monthly Start 'MS' if needed
         if returns_series.index.freq is None:
-            returns_series = returns_series.asfreq('MS', method='ffill') # Or choose appropriate frequency/fill method
+            returns_series = returns_series.asfreq('MS', method='bfill') # Or choose appropriate frequency/fill method
 
         decomposition = seasonal_decompose(returns_series.dropna(), model='additive', period=12) # Assuming monthly data, period=12
         return decomposition
